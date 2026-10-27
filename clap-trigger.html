@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Clap</title>
+<style>
+  :root{ --bg:#f4f4f5; --text:#18181b; --muted:#71717a; --accent:#18181b; --accent-text:#fff; color-scheme: light; }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){ --bg:#0b0b0d; --text:#f4f4f5; --muted:#a1a1aa; --accent:#f4f4f5; --accent-text:#0b0b0d; color-scheme: dark; }
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display:flex; align-items:center; justify-content:center;
+    padding:env(safe-area-inset-top,0px) 20px env(safe-area-inset-bottom,0px);
+  }
+  .card{ max-width:360px; width:100%; text-align:center; }
+  button{
+    appearance:none; border:none; border-radius:14px;
+    background:var(--accent); color:var(--accent-text);
+    font-size:1.1rem; font-weight:600; padding:18px 24px;
+    width:100%; cursor:pointer;
+  }
+  .status{ color:var(--muted); font-size:0.95rem; margin-top:14px; min-height:1.2em; }
+  .meterWrap{
+    margin-top:16px; height:10px; border-radius:6px; background:rgba(128,128,128,0.25);
+    overflow:hidden;
+  }
+  .meter{ height:100%; width:0%; background:var(--accent); transition:width 60ms linear; }
+  .row{ display:flex; align-items:center; gap:10px; margin-top:18px; }
+  .row label{ font-size:0.85rem; color:var(--muted); flex:0 0 90px; text-align:left; }
+  input[type=range]{ flex:1; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <button id="goBtn">Start listening</button>
+    <div class="status" id="status">tap to start</div>
+    <div class="meterWrap"><div class="meter" id="meter"></div></div>
+    <div class="row">
+      <label for="sens">Sensitivity</label>
+      <input type="range" id="sens" min="0.1" max="0.9" step="0.01" value="0.35">
+    </div>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getDatabase, ref, set } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+    // ======= PASTE YOUR FIREBASE CONFIG HERE (same as display.html / trigger.html) =======
+    const firebaseConfig = {
+      apiKey: "AIzaSyDAYPEEc-e9m0xYBraWBw86JJfu0GR56Mc",
+      databaseURL: "https://shock-v1-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "shock-v1"
+    };
+    // ==========================================================================================
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    const triggerRef = ref(db, "trigger");
+
+    const btn = document.getElementById('goBtn');
+    const statusEl = document.getElementById('status');
+    const meterEl = document.getElementById('meter');
+    const sensInput = document.getElementById('sens');
+
+    let listening = false;
+    let audioCtx = null;
+    let analyser = null;
+    let dataArray = null;
+    let rafId = null;
+    let lastFire = 0;
+    const COOLDOWN_MS = 1500; // min time between triggers
+
+    async function fireTrigger(){
+      const now = Date.now();
+      if (now - lastFire < COOLDOWN_MS) return;
+      lastFire = now;
+      try {
+        await set(triggerRef, { ts: now });
+        statusEl.textContent = 'clap detected — triggered ✓';
+      } catch (e) {
+        statusEl.textContent = 'send failed: ' + e.message;
+      }
+    }
+
+    function loop(){
+      analyser.getByteTimeDomainData(dataArray);
+      // compute peak amplitude (0..1) from the waveform
+      let peak = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        const v = Math.abs(dataArray[i] - 128) / 128;
+        if (v > peak) peak = v;
+      }
+      meterEl.style.width = Math.min(100, peak * 100) + '%';
+
+      const threshold = parseFloat(sensInput.value);
+      // lower slider value = more sensitive (lower threshold needed)
+      if (peak > (1 - threshold)) {
+        fireTrigger();
+      }
+      rafId = requestAnimationFrame(loop);
+    }
+
+    async function startListening(){
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioCtx.createMediaStreamSource(stream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 2048;
+        dataArray = new Uint8Array(analyser.fftSize);
+        source.connect(analyser);
+        statusEl.textContent = 'listening for claps';
+        loop();
+      } catch (e) {
+        statusEl.textContent = 'mic error: ' + e.message;
+      }
+    }
+
+    function stopListening(){
+      if (rafId) cancelAnimationFrame(rafId);
+      if (audioCtx) audioCtx.close();
+      meterEl.style.width = '0%';
+      statusEl.textContent = 'stopped';
+    }
+
+    btn.addEventListener('click', () => {
+      if (!listening) {
+        listening = true;
+        btn.textContent = 'Stop listening';
+        startListening();
+      } else {
+        listening = false;
+        btn.textContent = 'Start listening';
+        stopListening();
+      }
+    });
+  </script>
+</body>
+</html>
